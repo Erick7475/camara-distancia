@@ -1,0 +1,1257 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full bg-slate-950 text-slate-100 select-none">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>FotoMetría 2D & CamAR - Medición AR y Fotográfica</title>
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cyan: { 400: '#22d3ee', 500: '#06b6d4', 600: '#0891b2' },
+                        emerald: { 400: '#34d399', 500: '#10b981' }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Touch safety & clean scrollbars */
+        body {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(51, 65, 85, 0.8);
+            border-radius: 2px;
+        }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+        }
+        .canvas-crosshair { cursor: crosshair; }
+        .canvas-grab { cursor: grab; }
+        .canvas-grabbing { cursor: grabbing; }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 0.4; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+        .pulse-ring {
+            animation: pulse-ring 2s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="h-full flex flex-col font-sans overflow-hidden bg-slate-950 text-slate-100">
+
+    <!-- TOP NAV / AR HEADER -->
+    <header class="h-14 bg-slate-900/90 border-b border-slate-800 px-3 flex items-center justify-between shrink-0 z-30">
+        <div class="flex items-center gap-2">
+            <div class="p-2 bg-cyan-500/20 text-cyan-400 rounded-xl border border-cyan-500/30">
+                <i data-lucide="camera font-bold" class="w-5 h-5"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-sm tracking-wide text-white flex items-center gap-1.5">
+                    FotoMetría <span class="text-[10px] bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-500/30 font-mono">CamAR</span>
+                </h1>
+                <p class="text-[10px] text-slate-400 -mt-0.5">Fotogrametría & Trigonometría</p>
+            </div>
+        </div>
+
+        <!-- Mode Switcher Tabs -->
+        <div class="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs">
+            <button id="tab2dBtn" class="px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5 bg-cyan-600 text-white shadow">
+                <i data-lucide="ruler" class="w-3.5 h-3.5"></i>
+                <span>2D Foto</span>
+            </button>
+            <button id="tab3dBtn" class="px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5 text-slate-400 hover:text-white">
+                <i data-lucide="compass" class="w-3.5 h-3.5"></i>
+                <span>Inclinómetro AR</span>
+            </button>
+        </div>
+
+        <!-- Camera & Media Controls -->
+        <div class="flex items-center gap-1.5">
+            <button id="switchCamBtn" title="Cambiar Cámara" class="p-2 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            </button>
+            
+            <label title="Subir Imagen" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer">
+                <i data-lucide="upload" class="w-4 h-4"></i>
+                <input type="file" id="fileUploadInput" accept="image/*" class="hidden">
+            </label>
+
+            <button id="helpModalBtn" title="Ayuda y Consejos" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl border border-slate-700 transition">
+                <i data-lucide="help-circle" class="w-4 h-4"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- MAIN VIEWPORT CONTAINER -->
+    <div class="flex-1 flex overflow-hidden relative">
+
+        <!-- WORKSPACE CANVAS AREA -->
+        <main class="flex-1 relative bg-black flex items-center justify-center overflow-hidden" id="viewport">
+            
+            <!-- Video Camera Stream Element -->
+            <video id="cameraVideo" playsinline autoplay muted class="absolute inset-0 w-full h-full object-cover z-0 pointer-events-none hidden"></video>
+
+            <!-- Main Interactive Graphics Canvas -->
+            <canvas id="mainCanvas" class="absolute inset-0 z-10 w-full h-full canvas-grab"></canvas>
+
+            <!-- Live Inclinometer Target AR Overlay Crosshair -->
+            <div id="arCrosshairOverlay" class="hidden absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
+                <!-- Center Target reticle -->
+                <div class="relative w-24 h-24 flex items-center justify-center">
+                    <div class="absolute inset-0 border-2 border-dashed border-cyan-400/60 rounded-full pulse-ring"></div>
+                    <div class="w-3 h-3 bg-cyan-400 rounded-full shadow-lg shadow-cyan-400/80"></div>
+                    <!-- Crosshair lines -->
+                    <div class="absolute w-full h-0.5 bg-cyan-400/40"></div>
+                    <div class="absolute h-full w-0.5 bg-cyan-400/40"></div>
+                </div>
+
+                <!-- Horizon Line pitch bar -->
+                <div id="arHorizonLine" class="absolute w-64 h-0.5 bg-emerald-400 shadow-md shadow-emerald-400/50 flex items-center justify-between px-2 transition-transform duration-75">
+                    <div class="w-3 h-3 bg-emerald-400 -ml-1.5 rotate-45"></div>
+                    <span id="arPitchText" class="text-[11px] font-mono font-bold bg-slate-900/90 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/40 shadow">0.0°</span>
+                    <div class="w-3 h-3 bg-emerald-400 -mr-1.5 rotate-45"></div>
+                </div>
+            </div>
+
+            <!-- Floating Top Camera Capture / Freeze HUD Banner -->
+            <div id="cameraHudBanner" class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 glass-panel border border-slate-700/80 px-3 py-1.5 rounded-full shadow-xl">
+                <span id="camStatusDot" class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span id="camStatusText" class="text-xs font-medium text-slate-200">Cámara En Vivo</span>
+                
+                <button id="captureFreezeBtn" class="ml-2 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-white font-semibold text-xs rounded-full shadow transition flex items-center gap-1">
+                    <i data-lucide="aperture" class="w-3.5 h-3.5"></i>
+                    <span id="captureBtnLabel">Congelar Foto</span>
+                </button>
+            </div>
+
+            <!-- Precision Touch Magnifier / Loupe Element -->
+            <div id="magnifierLoupe" class="hidden absolute w-28 h-28 rounded-full border-2 border-cyan-400 shadow-2xl overflow-hidden z-40 pointer-events-none bg-slate-900">
+                <canvas id="loupeCanvas" class="w-full h-full block"></canvas>
+                <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div class="w-2.5 h-2.5 border border-cyan-400 bg-cyan-400/20 rounded-full"></div>
+                    <div class="absolute w-full h-px bg-cyan-400/40"></div>
+                    <div class="absolute h-full w-px bg-cyan-400/40"></div>
+                </div>
+            </div>
+
+            <!-- Floating Viewport Zoom Controls -->
+            <div class="absolute bottom-4 right-4 z-20 flex flex-col gap-1.5 glass-panel p-1 rounded-xl border border-slate-700/80 shadow-2xl">
+                <button id="zoomInBtn" class="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition">
+                    <i data-lucide="zoom-in" class="w-4 h-4"></i>
+                </button>
+                <button id="zoomOutBtn" class="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition">
+                    <i data-lucide="zoom-out" class="w-4 h-4"></i>
+                </button>
+                <button id="resetViewBtn" class="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-lg transition">
+                    <i data-lucide="maximize-2" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- Multi-node path finish bar -->
+            <div id="pathFinishBar" class="hidden absolute bottom-5 left-1/2 -translate-x-1/2 z-30 glass-panel border border-cyan-500/50 p-2 rounded-2xl shadow-2xl flex items-center gap-2">
+                <span class="text-xs text-slate-200 font-medium px-2">Añadiendo puntos...</span>
+                <button id="finishPathBtn" class="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold rounded-xl shadow flex items-center gap-1">
+                    <i data-lucide="check" class="w-3.5 h-3.5"></i> Finalizar
+                </button>
+                <button id="cancelPathBtn" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl">
+                    Cancelar
+                </button>
+            </div>
+        </main>
+
+        <!-- SIDEBAR / BOTTOM DRAWER FOR CONTROLS AND MEASUREMENTS -->
+        <aside id="controlsSidebar" class="w-full md:w-80 bg-slate-900/95 border-t md:border-t-0 md:border-l border-slate-800 flex flex-col shrink-0 z-20 max-h-[45vh] md:max-h-none overflow-hidden transition-all duration-300">
+            
+            <!-- 2D PHOTOGRAMMETRY PANEL CONTROLS -->
+            <div id="panel2DControls" class="flex flex-col h-full overflow-hidden">
+                
+                <!-- Calibration Box -->
+                <div class="p-3.5 border-b border-slate-800 bg-slate-900/60">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                            <i data-lucide="scale" class="w-3.5 h-3.5 text-cyan-400"></i> Calibración Escala
+                        </span>
+                        <span id="calibBadge" class="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                            Sin Calibrar
+                        </span>
+                    </div>
+
+                    <!-- Known Reference Object Selectors -->
+                    <div class="space-y-2 text-xs">
+                        <div>
+                            <label class="block text-[11px] text-slate-400 mb-1">Objeto de Referencia Conocido:</label>
+                            <select id="presetSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 text-xs focus:outline-none focus:border-cyan-500">
+                                <option value="custom">✏️ Personalizado (Trazar segmento)</option>
+                                <option value="85.6,mm" selected>💳 Tarjeta de Crédito (85.6 mm)</option>
+                                <option value="297,mm">📄 Hoja A4 - Largo (297 mm)</option>
+                                <option value="24.26,mm">🪙 Moneda (24.26 mm)</option>
+                                <option value="2.03,m">🚪 Puerta Estándar (2.03 m)</option>
+                            </select>
+                        </div>
+
+                        <div id="customCalibInputs" class="grid grid-cols-3 gap-2">
+                            <div class="col-span-2">
+                                <input type="number" id="calibValueInput" value="85.6" step="any" min="0.001" placeholder="Medida real" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-mono text-xs focus:outline-none focus:border-cyan-500">
+                            </div>
+                            <div>
+                                <select id="calibUnitSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none focus:border-cyan-500">
+                                    <option value="mm" selected>mm</option>
+                                    <option value="cm">cm</option>
+                                    <option value="m">m</option>
+                                    <option value="in">in</option>
+                                    <option value="ft">ft</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button id="startCalibBtn" class="w-full py-2 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-white font-semibold rounded-lg shadow transition flex items-center justify-center gap-1.5 text-xs">
+                            <i data-lucide="crosshair" class="w-3.5 h-3.5"></i>
+                            <span>Trazar Línea de Calibración</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Measurement Tools Selector -->
+                <div class="p-3 border-b border-slate-800">
+                    <span class="text-[11px] font-bold text-slate-300 uppercase tracking-wider block mb-2">
+                        Herramienta de Medida
+                    </span>
+                    <div class="grid grid-cols-3 gap-1.5">
+                        <button data-tool="pan" class="tool-btn active flex flex-col items-center gap-1 p-2 rounded-xl text-[11px] font-medium bg-slate-800 text-white border border-slate-700 transition">
+                            <i data-lucide="hand" class="w-4 h-4 text-cyan-400"></i>
+                            <span>Mover</span>
+                        </button>
+                        <button data-tool="line" class="tool-btn flex flex-col items-center gap-1 p-2 rounded-xl text-[11px] font-medium bg-slate-950/60 text-slate-300 border border-slate-800 hover:bg-slate-800 transition">
+                            <i data-lucide="minus" class="w-4 h-4 text-emerald-400"></i>
+                            <span>Línea</span>
+                        </button>
+                        <button data-tool="path" class="tool-btn flex flex-col items-center gap-1 p-2 rounded-xl text-[11px] font-medium bg-slate-950/60 text-slate-300 border border-slate-800 hover:bg-slate-800 transition">
+                            <i data-lucide="milestone" class="w-4 h-4 text-amber-400"></i>
+                            <span>Ruta</span>
+                        </button>
+                        <button data-tool="polygon" class="tool-btn flex flex-col items-center gap-1 p-2 rounded-xl text-[11px] font-medium bg-slate-950/60 text-slate-300 border border-slate-800 hover:bg-slate-800 transition">
+                            <i data-lucide="hexagon" class="w-4 h-4 text-purple-400"></i>
+                            <span>Área</span>
+                        </button>
+                        <button data-tool="angle" class="tool-btn flex flex-col items-center gap-1 p-2 rounded-xl text-[11px] font-medium bg-slate-950/60 text-slate-300 border border-slate-800 hover:bg-slate-800 transition">
+                            <i data-lucide="compass" class="w-4 h-4 text-rose-400"></i>
+                            <span>Ángulo</span>
+                        </button>
+                        <button id="downloadAnnotatedBtn" title="Exportar Foto Anotada" class="flex flex-col items-center gap-1 p-2 rounded-xl text-[11px] font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition shadow">
+                            <i data-lucide="download" class="w-4 h-4"></i>
+                            <span>Guardar</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Measurement History List -->
+                <div class="flex-1 flex flex-col min-h-0 p-3 overflow-hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                            Resultados (<span id="measureCount">0</span>)
+                        </span>
+                        <button id="clearMeasuresBtn" class="text-[10px] text-rose-400 hover:underline flex items-center gap-1">
+                            <i data-lucide="trash-2" class="w-3 h-3"></i> Borrar Todo
+                        </button>
+                    </div>
+
+                    <div id="measurementsList" class="flex-1 overflow-y-auto space-y-1.5 pr-1">
+                        <div id="emptyListNotice" class="text-center py-6 text-slate-500 text-xs">
+                            <i data-lucide="ruler" class="w-6 h-6 mx-auto mb-1 opacity-30"></i>
+                            Sin mediciones agregadas.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- INCLINOMETER TRIGONOMETRY PANEL CONTROLS -->
+            <div id="panel3DControls" class="hidden flex-col h-full p-4 space-y-4 overflow-y-auto">
+                <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="text-xs font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <i data-lucide="user" class="w-4 h-4"></i> Altura de la Cámara
+                        </span>
+                        <span class="text-[10px] text-slate-400">Desde el suelo</span>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <input type="number" id="camHeightInput" value="1.50" step="0.05" min="0.1" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-cyan-500">
+                        <span class="text-xs font-semibold text-slate-300">Metros</span>
+                    </div>
+                </div>
+
+                <!-- Live Angles & Distance Readout Box -->
+                <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3 text-center">
+                    <div class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Lectura Trigonométrica AR</div>
+                    
+                    <div class="grid grid-cols-2 gap-2 my-2">
+                        <div class="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                            <div class="text-[10px] text-slate-400">Inclinación (Pitch)</div>
+                            <div id="pitchAngleValue" class="text-lg font-mono font-bold text-cyan-400">0.0°</div>
+                        </div>
+                        <div class="bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                            <div class="text-[10px] text-slate-400">Distancia Estimada</div>
+                            <div id="calculatedDistanceValue" class="text-lg font-mono font-bold text-emerald-400">0.00 m</div>
+                        </div>
+                    </div>
+
+                    <p class="text-[11px] text-slate-400 leading-tight">
+                        Apunta la retícula central a la <strong>base del objeto</strong> en el suelo y pulsa Fijar Lectura.
+                    </p>
+
+                    <button id="lockInclinometerBtn" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold rounded-xl shadow-lg transition flex items-center justify-center gap-2 text-xs">
+                        <i data-lucide="target" class="w-4 h-4"></i>
+                        <span>Fijar y Registrar Distancia</span>
+                    </button>
+
+                    <button id="enableSensorsBtn" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-xs transition flex items-center justify-center gap-1.5">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5 text-cyan-400"></i>
+                        <span>Activar Giroscopio / Sensores</span>
+                    </button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- INSTRUCTIONS / HELP MODAL -->
+    <div id="helpModal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div class="p-4 border-b border-slate-800 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="p-2 bg-cyan-500/20 text-cyan-400 rounded-lg">
+                        <i data-lucide="book-open" class="w-5 h-5"></i>
+                    </div>
+                    <h3 class="font-bold text-slate-100 text-sm">Guía de Medición y Precisión</h3>
+                </div>
+                <button id="closeHelpBtn" class="text-slate-400 hover:text-white p-1">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            
+            <div class="p-5 overflow-y-auto space-y-4 text-xs text-slate-300 leading-relaxed">
+                <div>
+                    <h4 class="font-bold text-cyan-400 text-xs mb-1 flex items-center gap-1">
+                        <i data-lucide="ruler" class="w-3.5 h-3.5"></i> Método 1: Fotogrametría 2D (Objeto de Referencia)
+                    </h4>
+                    <p class="text-slate-400">
+                        1. Coloca un objeto de tamaño conocido (tarjeta de crédito, hoja A4, regla) en el mismo plano que el objeto a medir.<br>
+                        2. Toma una foto o congela la cámara de forma perpendicular (de frente).<br>
+                        3. Pulsa <strong>Calibrar</strong> y traza una línea sobre el objeto de referencia.<br>
+                        4. Usa las herramientas de Línea, Ruta o Área para medir cualquier otro elemento.
+                    </p>
+                </div>
+
+                <div class="border-t border-slate-800 pt-3">
+                    <h4 class="font-bold text-emerald-400 text-xs mb-1 flex items-center gap-1">
+                        <i data-lucide="compass" class="w-3.5 h-3.5"></i> Método 2: Inclinómetro Trigonométrico AR
+                    </h4>
+                    <p class="text-slate-400">
+                        1. Ingresa la altura exacta a la que sostienes la cámara respecto al suelo (ej. 1.50 metros).<br>
+                        2. Mantente de pie sin inclinarte y apunta la retícula central justo a la **base del objeto** sobre el suelo.<br>
+                        3. La aplicación usará el ángulo de inclinación ($\theta$) y la fórmula $D = H \times \tan(90^\circ - \theta)$ para calcular la distancia.
+                    </p>
+                </div>
+
+                <div class="border-t border-slate-800 pt-3 bg-slate-950/50 p-3 rounded-xl border border-slate-800">
+                    <h5 class="font-bold text-amber-400 text-[11px] mb-1">💡 Consejos para Máxima Precisión:</h5>
+                    <ul class="list-disc list-inside space-y-1 text-slate-400 text-[11px]">
+                        <li>Evita medir objetos en ángulo diagonal inclinado sin calibración previa.</li>
+                        <li>Utiliza la lupa táctil para ajustar de forma milimétrica los vértices.</li>
+                        <li>Asegúrate de permitir el acceso a la cámara y sensores de orientación.</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="p-3 bg-slate-950 border-t border-slate-800 flex justify-end">
+                <button onclick="document.getElementById('helpModal').classList.add('hidden')" class="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-semibold shadow">
+                    Entendido
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN JAVASCRIPT LOGIC -->
+    <script>
+        // --- APPLICATION STATE ---
+        const state = {
+            mode: '2d', // '2d' or '3d'
+            cameraActive: false,
+            cameraFacing: 'environment', // 'environment' or 'user'
+            stream: null,
+            frozenImage: null, // Image object when camera is frozen or photo uploaded
+            isFrozen: false,
+
+            // Viewport Transforms
+            zoom: 1,
+            panX: 0,
+            panY: 0,
+            isPanning: false,
+            startPanX: 0,
+            startPanY: 0,
+
+            // Active Tool: 'pan', 'calibrate', 'line', 'path', 'polygon', 'angle'
+            activeTool: 'pan',
+
+            // Calibration (2D Photogrammetry)
+            pxPerUnit: 1,
+            unit: 'cm',
+            isCalibrated: false,
+            calibLine: null, // temp line {p1, p2}
+
+            // Drawing in progress
+            currentPoints: [],
+            hoverPoint: null,
+            selectedNode: null, // { mId, pIdx }
+
+            // Inclinometer / Gyro
+            cameraHeight: 1.50, // meters
+            pitchAngle: 0, // degrees
+            calculatedDist: 0, // meters
+            orientationPermission: false,
+
+            // Measurements list
+            measurements: []
+        };
+
+        const COLOR_PALETTE = ['#22d3ee', '#10b981', '#f59e0b', '#a855f7', '#ec4899', '#f43f5e'];
+
+        // --- DOM ELEMENTS ---
+        const video = document.getElementById('cameraVideo');
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+        const viewport = document.getElementById('viewport');
+
+        const loupeContainer = document.getElementById('magnifierLoupe');
+        const loupeCanvas = document.getElementById('loupeCanvas');
+        const loupeCtx = loupeCanvas.getContext('2d');
+
+        const arCrosshairOverlay = document.getElementById('arCrosshairOverlay');
+        const arHorizonLine = document.getElementById('arHorizonLine');
+        const arPitchText = document.getElementById('arPitchText');
+        const pitchAngleValue = document.getElementById('pitchAngleValue');
+        const calculatedDistanceValue = document.getElementById('calculatedDistanceValue');
+
+        const cameraHudBanner = document.getElementById('cameraHudBanner');
+        const camStatusDot = document.getElementById('camStatusDot');
+        const camStatusText = document.getElementById('camStatusText');
+        const captureFreezeBtn = document.getElementById('captureFreezeBtn');
+        const captureBtnLabel = document.getElementById('captureBtnLabel');
+
+        const calibBadge = document.getElementById('calibBadge');
+        const presetSelect = document.getElementById('presetSelect');
+        const calibValueInput = document.getElementById('calibValueInput');
+        const calibUnitSelect = document.getElementById('calibUnitSelect');
+        const startCalibBtn = document.getElementById('startCalibBtn');
+
+        const measurementsList = document.getElementById('measurementsList');
+        const emptyListNotice = document.getElementById('emptyListNotice');
+        const measureCount = document.getElementById('measureCount');
+
+        const pathFinishBar = document.getElementById('pathFinishBar');
+
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // --- CANVAS HDPI & RESIZE ---
+        function resizeCanvas() {
+            const rect = viewport.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            loupeCanvas.width = 112;
+            loupeCanvas.height = 112;
+            requestAnimationFrame(render);
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- CAMERA STREAM API ---
+        async function initCamera() {
+            if (state.stream) {
+                state.stream.getTracks().forEach(t => t.stop());
+            }
+
+            try {
+                const constraints = {
+                    video: {
+                        facingMode: { ideal: state.cameraFacing },
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                };
+
+                state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = state.stream;
+                await video.play();
+
+                state.cameraActive = true;
+                state.isFrozen = false;
+                video.classList.remove('hidden');
+
+                camStatusDot.className = "w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse";
+                camStatusText.innerText = "Cámara En Vivo";
+                captureBtnLabel.innerText = "Congelar Foto";
+
+                requestAnimationFrame(renderLoop);
+            } catch (err) {
+                console.warn("Camera access failed or denied:", err);
+                state.cameraActive = false;
+                camStatusDot.className = "w-2.5 h-2.5 rounded-full bg-amber-500";
+                camStatusText.innerText = "Modo Imagen Fija";
+                
+                // Fallback to procedural sample image if camera not accessible
+                if (!state.frozenImage) {
+                    loadSampleImage();
+                }
+            }
+        }
+
+        function toggleCameraFreeze() {
+            if (!state.isFrozen && state.cameraActive) {
+                // Freeze live camera snapshot
+                const tempCanvas = document.createElement('canvas');
+                tempCanvas.width = video.videoWidth || canvas.width;
+                tempCanvas.height = video.videoHeight || canvas.height;
+                const tCtx = tempCanvas.getContext('2d');
+                tCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
+
+                const img = new Image();
+                img.onload = () => {
+                    state.frozenImage = img;
+                    state.isFrozen = true;
+                    video.classList.add('hidden');
+                    camStatusDot.className = "w-2.5 h-2.5 rounded-full bg-cyan-400";
+                    camStatusText.innerText = "Foto Congelada";
+                    captureBtnLabel.innerText = "Reanudar Cámara";
+                    resetView();
+                };
+                img.src = tempCanvas.toDataURL('image/png');
+            } else {
+                // Resume live camera
+                state.isFrozen = false;
+                state.frozenImage = null;
+                initCamera();
+            }
+        }
+
+        captureFreezeBtn.addEventListener('click', toggleCameraFreeze);
+
+        document.getElementById('switchCamBtn').addEventListener('click', () => {
+            state.cameraFacing = state.cameraFacing === 'environment' ? 'user' : 'environment';
+            initCamera();
+        });
+
+        // Image Upload Fallback
+        document.getElementById('fileUploadInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                const img = new Image();
+                img.onload = () => {
+                    state.frozenImage = img;
+                    state.isFrozen = true;
+                    video.classList.add('hidden');
+                    camStatusDot.className = "w-2.5 h-2.5 rounded-full bg-cyan-400";
+                    camStatusText.innerText = "Imagen Cargada";
+                    captureBtnLabel.innerText = "Activar Cámara";
+                    resetView();
+                };
+                img.src = evt.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        function loadSampleImage() {
+            const sCanvas = document.createElement('canvas');
+            sCanvas.width = 1200;
+            sCanvas.height = 800;
+            const sCtx = sCanvas.getContext('2d');
+            sCtx.fillStyle = '#0f172a';
+            sCtx.fillRect(0, 0, 1200, 800);
+
+            // Card mockup (85.6mm)
+            sCtx.fillStyle = '#1e293b';
+            sCtx.roundRect(400, 300, 342.4, 215.9, 16);
+            sCtx.fill();
+            sCtx.fillStyle = '#38bdf8';
+            sCtx.font = 'bold 18px sans-serif';
+            sCtx.fillText('TARJETA DE REFERENCIA (85.6 mm)', 420, 350);
+
+            const img = new Image();
+            img.onload = () => {
+                state.frozenImage = img;
+                state.isFrozen = true;
+                resetView();
+            };
+            img.src = sCanvas.toDataURL();
+        }
+
+        // --- INCLINOMETER / SENSOR GYROSCOPE LOGIC ---
+        function handleOrientation(e) {
+            if (e.beta === null) return;
+            
+            // Beta represents pitch angle in degrees (-180 to 180)
+            // When holding phone upright vertically: beta ~ 90 deg.
+            let pitch = e.beta;
+            
+            // Filter / smoothing
+            state.pitchAngle = pitch;
+
+            // Calculate distance to ground base using trigonometry:
+            // Angle from zenith or horizon angle:
+            // When pointing straight down: pitch = 0, distance = 0
+            // When pointing horizontal: pitch = 90
+            const tiltFromVerticalRad = (90 - pitch) * (Math.PI / 180);
+            
+            if (tiltFromVerticalRad > 0 && tiltFromVerticalRad < Math.PI / 2) {
+                state.calculatedDist = state.cameraHeight * Math.tan(tiltFromVerticalRad);
+            } else {
+                state.calculatedDist = 0;
+            }
+
+            updateInclinometerUI();
+        }
+
+        async function requestGyroSensors() {
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const response = await DeviceOrientationEvent.requestPermission();
+                    if (response === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation);
+                        state.orientationPermission = true;
+                    } else {
+                        alert('Permiso de sensores denegado');
+                    }
+                } catch(err) {
+                    console.error(err);
+                }
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+                state.orientationPermission = true;
+            }
+        }
+
+        document.getElementById('enableSensorsBtn').addEventListener('click', requestGyroSensors);
+
+        function updateInclinometerUI() {
+            const pText = `${state.pitchAngle.toFixed(1)}°`;
+            arPitchText.innerText = pText;
+            pitchAngleValue.innerText = pText;
+
+            const distText = state.calculatedDist > 0 ? `${state.calculatedDist.toFixed(2)} m` : '-- m';
+            calculatedDistanceValue.innerText = distText;
+
+            // Rotate horizon indicator on screen
+            const offset = (90 - state.pitchAngle) * 3;
+            arHorizonLine.style.transform = `translateY(${Math.min(Math.max(offset, -150), 150)}px)`;
+        }
+
+        document.getElementById('camHeightInput').addEventListener('input', (e) => {
+            state.cameraHeight = parseFloat(e.target.value) || 1.5;
+            updateInclinometerUI();
+        });
+
+        document.getElementById('lockInclinometerBtn').addEventListener('click', () => {
+            if (state.calculatedDist <= 0) return;
+            const distVal = state.calculatedDist.toFixed(2);
+            
+            state.measurements.push({
+                id: Date.now(),
+                type: 'line',
+                label: `Dist. AR (${state.pitchAngle.toFixed(0)}°)`,
+                color: '#10b981',
+                points: [],
+                customText: `${distVal} m`
+            });
+            
+            updateMeasurementsUI();
+        });
+
+        // --- MODE TABS SWITCHING ---
+        const tab2dBtn = document.getElementById('tab2dBtn');
+        const tab3dBtn = document.getElementById('tab3dBtn');
+        const panel2DControls = document.getElementById('panel2DControls');
+        const panel3DControls = document.getElementById('panel3DControls');
+
+        tab2dBtn.addEventListener('click', () => {
+            state.mode = '2d';
+            tab2dBtn.className = "px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5 bg-cyan-600 text-white shadow";
+            tab3dBtn.className = "px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5 text-slate-400 hover:text-white";
+            panel2DControls.classList.remove('hidden');
+            panel2DControls.classList.add('flex');
+            panel3DControls.classList.add('hidden');
+            panel3DControls.classList.remove('flex');
+            arCrosshairOverlay.classList.add('hidden');
+            requestAnimationFrame(render);
+        });
+
+        tab3dBtn.addEventListener('click', () => {
+            state.mode = '3d';
+            tab3dBtn.className = "px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5 bg-cyan-600 text-white shadow";
+            tab2dBtn.className = "px-3 py-1 rounded-lg font-medium transition flex items-center gap-1.5 text-slate-400 hover:text-white";
+            panel3DControls.classList.remove('hidden');
+            panel3DControls.classList.add('flex');
+            panel2DControls.classList.add('hidden');
+            panel2DControls.classList.remove('flex');
+            arCrosshairOverlay.classList.remove('hidden');
+            requestGyroSensors();
+            requestAnimationFrame(render);
+        });
+
+        // --- COORDINATE TRANSFORMATIONS ---
+        function screenToImage(screenX, screenY) {
+            return {
+                x: (screenX - state.panX) / state.zoom,
+                y: (screenY - state.panY) / state.zoom
+            };
+        }
+
+        function imageToScreen(imgX, imgY) {
+            return {
+                x: imgX * state.zoom + state.panX,
+                y: imgY * state.zoom + state.panY
+            };
+        }
+
+        function resetView() {
+            const imgWidth = state.frozenImage ? state.frozenImage.width : (video.videoWidth || canvas.width);
+            const imgHeight = state.frozenImage ? state.frozenImage.height : (video.videoHeight || canvas.height);
+            
+            const scaleW = canvas.width / imgWidth;
+            const scaleH = canvas.height / imgHeight;
+            state.zoom = Math.min(scaleW, scaleH, 1);
+            state.panX = (canvas.width - imgWidth * state.zoom) / 2;
+            state.panY = (canvas.height - imgHeight * state.zoom) / 2;
+            requestAnimationFrame(render);
+        }
+
+        document.getElementById('zoomInBtn').addEventListener('click', () => { state.zoom *= 1.25; requestAnimationFrame(render); });
+        document.getElementById('zoomOutBtn').addEventListener('click', () => { state.zoom /= 1.25; requestAnimationFrame(render); });
+        document.getElementById('resetViewBtn').addEventListener('click', resetView);
+
+        // --- TOOL SELECTOR ---
+        function setTool(toolName) {
+            state.activeTool = toolName;
+            state.currentPoints = [];
+            pathFinishBar.classList.add('hidden');
+
+            document.querySelectorAll('.tool-btn').forEach(btn => {
+                if (btn.dataset.tool === toolName) {
+                    btn.classList.add('active', 'bg-slate-800', 'text-white', 'border-slate-700');
+                    btn.classList.remove('bg-slate-950/60', 'text-slate-300');
+                } else {
+                    btn.classList.remove('active', 'bg-slate-800', 'text-white', 'border-slate-700');
+                    btn.classList.add('bg-slate-950/60', 'text-slate-300');
+                }
+            });
+
+            canvas.className = toolName === 'pan' ? 'absolute inset-0 z-10 w-full h-full canvas-grab' : 'absolute inset-0 z-10 w-full h-full canvas-crosshair';
+            requestAnimationFrame(render);
+        }
+
+        document.querySelectorAll('.tool-btn').forEach(btn => {
+            btn.addEventListener('click', () => setTool(btn.dataset.tool));
+        });
+
+        // Preset Calibration Options Handler
+        presetSelect.addEventListener('change', (e) => {
+            if (e.target.value === 'custom') {
+                calibValueInput.value = '10';
+                calibUnitSelect.value = 'cm';
+            } else {
+                const [val, unit] = e.target.value.split(',');
+                calibValueInput.value = val;
+                calibUnitSelect.value = unit;
+            }
+        });
+
+        startCalibBtn.addEventListener('click', () => setTool('calibrate'));
+
+        // --- TOUCH & MOUSE INTERACTION HANDLERS ---
+        function getPointerPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                screenX: clientX - rect.left,
+                screenY: clientY - rect.top,
+                clientX,
+                clientY
+            };
+        }
+
+        function findHitNode(imgCoords) {
+            const radiusPx = 14 / state.zoom;
+            for (let m of state.measurements) {
+                for (let i = 0; i < m.points.length; i++) {
+                    const pt = m.points[i];
+                    if (Math.hypot(pt.x - imgCoords.x, pt.y - imgCoords.y) <= radiusPx) {
+                        return { mId: m.id, pIdx: i };
+                    }
+                }
+            }
+            return null;
+        }
+
+        function handlePointerStart(e) {
+            const { screenX, screenY, clientX, clientY } = getPointerPos(e);
+            const imgCoords = screenToImage(screenX, screenY);
+
+            const hit = findHitNode(imgCoords);
+            if (hit && state.activeTool === 'pan') {
+                state.selectedNode = hit;
+                showLoupe(clientX, clientY, imgCoords);
+                return;
+            }
+
+            if (state.activeTool === 'pan') {
+                state.isPanning = true;
+                state.startPanX = screenX - state.panX;
+                state.startPanY = screenY - state.panY;
+                canvas.className = 'absolute inset-0 z-10 w-full h-full canvas-grabbing';
+                return;
+            }
+
+            // Drawing tools logic
+            if (['calibrate', 'line', 'path', 'polygon', 'angle'].includes(state.activeTool)) {
+                state.currentPoints.push(imgCoords);
+                showLoupe(clientX, clientY, imgCoords);
+
+                if (state.activeTool === 'calibrate' && state.currentPoints.length === 2) {
+                    applyCalibration(state.currentPoints[0], state.currentPoints[1]);
+                    state.currentPoints = [];
+                    setTool('pan');
+                } else if (state.activeTool === 'line' && state.currentPoints.length === 2) {
+                    addMeasurement('line', state.currentPoints);
+                    state.currentPoints = [];
+                } else if (state.activeTool === 'angle' && state.currentPoints.length === 3) {
+                    addMeasurement('angle', state.currentPoints);
+                    state.currentPoints = [];
+                } else if (['path', 'polygon'].includes(state.activeTool)) {
+                    pathFinishBar.classList.remove('hidden');
+                }
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        function handlePointerMove(e) {
+            const { screenX, screenY, clientX, clientY } = getPointerPos(e);
+            const imgCoords = screenToImage(screenX, screenY);
+            state.hoverPoint = imgCoords;
+
+            if (state.selectedNode) {
+                const m = state.measurements.find(x => x.id === state.selectedNode.mId);
+                if (m) {
+                    m.points[state.selectedNode.pIdx] = imgCoords;
+                    updateMeasurementsUI();
+                }
+                showLoupe(clientX, clientY, imgCoords);
+                requestAnimationFrame(render);
+                return;
+            }
+
+            if (state.isPanning) {
+                state.panX = screenX - state.startPanX;
+                state.panY = screenY - state.startPanY;
+                requestAnimationFrame(render);
+                return;
+            }
+
+            if (state.currentPoints.length > 0) {
+                showLoupe(clientX, clientY, imgCoords);
+                requestAnimationFrame(render);
+            } else {
+                hideLoupe();
+            }
+        }
+
+        function handlePointerEnd() {
+            state.isPanning = false;
+            state.selectedNode = null;
+            hideLoupe();
+            canvas.className = state.activeTool === 'pan' ? 'absolute inset-0 z-10 w-full h-full canvas-grab' : 'absolute inset-0 z-10 w-full h-full canvas-crosshair';
+        }
+
+        canvas.addEventListener('mousedown', handlePointerStart);
+        canvas.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', handlePointerEnd);
+
+        canvas.addEventListener('touchstart', (e) => { e.preventDefault(); handlePointerStart(e); }, { passive: false });
+        canvas.addEventListener('touchmove', (e) => { e.preventDefault(); handlePointerMove(e); }, { passive: false });
+        window.addEventListener('touchend', handlePointerEnd);
+
+        // --- PRECISION TOUCH MAGNIFIER / LOUPE ---
+        function showLoupe(clientX, clientY, imgPt) {
+            loupeContainer.classList.remove('hidden');
+            
+            // Position loupe offset from touch point
+            const offsetX = clientX < window.innerWidth / 2 ? 70 : -140;
+            const offsetY = -140;
+            loupeContainer.style.left = `${clientX + offsetX}px`;
+            loupeContainer.style.top = `${clientY + offsetY}px`;
+
+            // Render zoomed portion
+            loupeCtx.clearRect(0, 0, 112, 112);
+            loupeCtx.save();
+            loupeCtx.scale(2.5, 2.5);
+
+            const srcW = 112 / (state.zoom * 2.5);
+            const srcH = 112 / (state.zoom * 2.5);
+            const srcX = imgPt.x - srcW / 2;
+            const srcY = imgPt.y - srcH / 2;
+
+            if (state.frozenImage) {
+                loupeCtx.drawImage(state.frozenImage, srcX, srcY, srcW, srcH, 0, 0, 112 / 2.5, 112 / 2.5);
+            } else if (state.cameraActive) {
+                loupeCtx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, 112 / 2.5, 112 / 2.5);
+            }
+            loupeCtx.restore();
+        }
+
+        function hideLoupe() {
+            loupeContainer.classList.add('hidden');
+        }
+
+        // --- CALIBRATION MATHEMATICS ---
+        function applyCalibration(p1, p2) {
+            const pxDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+            const realVal = parseFloat(calibValueInput.value);
+            const unit = calibUnitSelect.value;
+
+            if (pxDist > 0 && realVal > 0) {
+                state.pxPerUnit = pxDist / realVal;
+                state.unit = unit;
+                state.isCalibrated = true;
+
+                calibBadge.innerText = `1 ${unit} = ${state.pxPerUnit.toFixed(1)} px`;
+                calibBadge.className = 'text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+                
+                updateMeasurementsUI();
+            }
+        }
+
+        // --- MEASUREMENTS CALCULATION ---
+        function calculateMeasurement(m) {
+            if (m.customText) return m.customText;
+
+            const pxPerUnit = state.pxPerUnit || 1;
+            const pts = m.points;
+
+            if (m.type === 'line' && pts.length >= 2) {
+                const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) / pxPerUnit;
+                return `${dist.toFixed(2)} ${state.unit}`;
+            } else if (m.type === 'path') {
+                let totalPx = 0;
+                for (let i = 0; i < pts.length - 1; i++) {
+                    totalPx += Math.hypot(pts[i+1].x - pts[i].x, pts[i+1].y - pts[i].y);
+                }
+                return `${(totalPx / pxPerUnit).toFixed(2)} ${state.unit}`;
+            } else if (m.type === 'polygon' && pts.length >= 3) {
+                let areaPx = 0;
+                const n = pts.length;
+                for (let i = 0; i < n; i++) {
+                    const j = (i + 1) % n;
+                    areaPx += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+                }
+                const realArea = Math.abs(areaPx / 2) / (pxPerUnit * pxPerUnit);
+                return `${realArea.toFixed(2)} ${state.unit}²`;
+            } else if (m.type === 'angle' && pts.length === 3) {
+                const [p1, p2, p3] = pts;
+                const a1 = Math.atan2(p1.y - p2.y, p1.x - p2.x);
+                const a2 = Math.atan2(p3.y - p2.y, p3.x - p2.x);
+                let rad = Math.abs(a1 - a2);
+                if (rad > Math.PI) rad = 2 * Math.PI - rad;
+                return `${((rad * 180) / Math.PI).toFixed(1)}°`;
+            }
+            return '--';
+        }
+
+        function addMeasurement(type, points) {
+            const typeNames = { line: 'Línea', path: 'Ruta', polygon: 'Área', angle: 'Ángulo' };
+            const m = {
+                id: Date.now(),
+                type,
+                label: `${typeNames[type]} ${state.measurements.length + 1}`,
+                color: COLOR_PALETTE[state.measurements.length % COLOR_PALETTE.length],
+                points: [...points]
+            };
+            state.measurements.push(m);
+            updateMeasurementsUI();
+        }
+
+        document.getElementById('finishPathBtn').addEventListener('click', () => {
+            if (state.currentPoints.length >= 2) {
+                addMeasurement(state.activeTool, state.currentPoints);
+            }
+            state.currentPoints = [];
+            pathFinishBar.classList.add('hidden');
+            requestAnimationFrame(render);
+        });
+
+        document.getElementById('cancelPathBtn').addEventListener('click', () => {
+            state.currentPoints = [];
+            pathFinishBar.classList.add('hidden');
+            requestAnimationFrame(render);
+        });
+
+        // --- MEASUREMENT LIST UI ---
+        function updateMeasurementsUI() {
+            measureCount.innerText = state.measurements.length;
+            measurementsList.innerHTML = '';
+
+            if (state.measurements.length === 0) {
+                measurementsList.appendChild(emptyListNotice);
+                return;
+            }
+
+            state.measurements.forEach(m => {
+                const valText = calculateMeasurement(m);
+                const card = document.createElement('div');
+                card.className = 'bg-slate-950 p-2 rounded-xl border border-slate-800 flex items-center justify-between gap-2 text-xs';
+                
+                card.innerHTML = `
+                    <div class="flex items-center gap-2 flex-1 min-w-0">
+                        <input type="color" value="${m.color}" class="w-4 h-4 rounded cursor-pointer border-0 bg-transparent shrink-0 color-pick">
+                        <div class="min-w-0 flex-1">
+                            <input type="text" value="${m.label}" class="bg-transparent text-slate-200 font-medium focus:outline-none focus:bg-slate-900 rounded px-1 text-xs w-full label-input">
+                            <div class="text-[11px] font-mono text-cyan-400 font-bold px-1">${valText}</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-1 shrink-0">
+                        <button class="p-1 hover:text-cyan-400 text-slate-400 copy-btn" title="Copiar valor">
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                        </button>
+                        <button class="p-1 hover:text-rose-400 text-slate-400 delete-btn" title="Eliminar">
+                            <i data-lucide="trash" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
+                `;
+
+                card.querySelector('.color-pick').addEventListener('input', (e) => {
+                    m.color = e.target.value;
+                    requestAnimationFrame(render);
+                });
+
+                card.querySelector('.label-input').addEventListener('change', (e) => {
+                    m.label = e.target.value;
+                });
+
+                card.querySelector('.copy-btn').addEventListener('click', () => {
+                    const temp = document.createElement('textarea');
+                    temp.value = `${m.label}: ${valText}`;
+                    document.body.appendChild(temp);
+                    temp.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(temp);
+                });
+
+                card.querySelector('.delete-btn').addEventListener('click', () => {
+                    state.measurements = state.measurements.filter(x => x.id !== m.id);
+                    updateMeasurementsUI();
+                    requestAnimationFrame(render);
+                });
+
+                measurementsList.appendChild(card);
+            });
+
+            lucide.createIcons();
+        }
+
+        document.getElementById('clearMeasuresBtn').addEventListener('click', () => {
+            state.measurements = [];
+            updateMeasurementsUI();
+            requestAnimationFrame(render);
+        });
+
+        // --- EXPORT ANNOTATED PHOTO ---
+        document.getElementById('downloadAnnotatedBtn').addEventListener('click', () => {
+            const expCanvas = document.createElement('canvas');
+            const imgW = state.frozenImage ? state.frozenImage.width : (video.videoWidth || canvas.width);
+            const imgH = state.frozenImage ? state.frozenImage.height : (video.videoHeight || canvas.height);
+
+            expCanvas.width = imgW;
+            expCanvas.height = imgH;
+            const eCtx = expCanvas.getContext('2d');
+
+            if (state.frozenImage) {
+                eCtx.drawImage(state.frozenImage, 0, 0);
+            } else {
+                eCtx.drawImage(video, 0, 0, imgW, imgH);
+            }
+
+            // Draw measurements at 1:1 scale
+            const oldZoom = state.zoom, oldPanX = state.panX, oldPanY = state.panY;
+            state.zoom = 1; state.panX = 0; state.panY = 0;
+
+            const mainCtx = ctx;
+            window.ctx = eCtx;
+
+            state.measurements.forEach(m => drawMeasurement(m));
+
+            window.ctx = mainCtx;
+            state.zoom = oldZoom; state.panX = oldPanX; state.panY = oldPanY;
+
+            const a = document.createElement('a');
+            a.download = `medicion_fotometria_${Date.now()}.png`;
+            a.href = expCanvas.toDataURL('image/png');
+            a.click();
+        });
+
+        // --- RENDER LOOP & CANVAS OVERLAYS ---
+        function renderLoop() {
+            render();
+            if (state.cameraActive && !state.isFrozen) {
+                requestAnimationFrame(renderLoop);
+            }
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(state.panX, state.panY);
+            ctx.scale(state.zoom, state.zoom);
+
+            // Draw frozen image if captured
+            if (state.isFrozen && state.frozenImage) {
+                ctx.drawImage(state.frozenImage, 0, 0);
+            }
+
+            // Draw finished measurements
+            state.measurements.forEach(m => drawMeasurement(m));
+
+            // Draw drawing in progress
+            if (state.currentPoints.length > 0 && state.hoverPoint) {
+                const pts = [...state.currentPoints, state.hoverPoint];
+                ctx.strokeStyle = '#22d3ee';
+                ctx.lineWidth = 2 / state.zoom;
+                ctx.setLineDash([4 / state.zoom, 4 / state.zoom]);
+                
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                if (state.activeTool === 'polygon' && pts.length > 2) ctx.closePath();
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                pts.forEach(p => drawNode(p, '#22d3ee'));
+            }
+
+            ctx.restore();
+        }
+
+        function drawNode(pt, color) {
+            ctx.fillStyle = color;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2 / state.zoom;
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 6 / state.zoom, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
+
+        function drawMeasurement(m) {
+            const valText = calculateMeasurement(m);
+            const pts = m.points;
+            if (pts.length < 2 && !m.customText) return;
+
+            ctx.strokeStyle = m.color;
+            ctx.lineWidth = 3 / state.zoom;
+
+            if (m.type === 'line') {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                ctx.lineTo(pts[1].x, pts[1].y);
+                ctx.stroke();
+
+                pts.forEach(p => drawNode(p, m.color));
+                const midX = (pts[0].x + pts[1].x) / 2;
+                const midY = (pts[0].y + pts[1].y) / 2;
+                drawLabel(`${m.label}: ${valText}`, midX, midY, m.color);
+            } else if (m.type === 'path') {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                ctx.stroke();
+
+                pts.forEach(p => drawNode(p, m.color));
+                const last = pts[pts.length - 1];
+                drawLabel(`${m.label}: ${valText}`, last.x, last.y - 12 / state.zoom, m.color);
+            } else if (m.type === 'polygon' && pts.length >= 3) {
+                ctx.fillStyle = m.color + '33';
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+                ctx.closePath();
+                ctx.fill();
+                ctx.stroke();
+
+                pts.forEach(p => drawNode(p, m.color));
+                let cx = 0, cy = 0;
+                pts.forEach(p => { cx += p.x; cy += p.y; });
+                drawLabel(`${m.label}: ${valText}`, cx / pts.length, cy / pts.length, m.color);
+            } else if (m.type === 'angle' && pts.length === 3) {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                ctx.lineTo(pts[1].x, pts[1].y);
+                ctx.lineTo(pts[2].x, pts[2].y);
+                ctx.stroke();
+
+                pts.forEach(p => drawNode(p, m.color));
+                drawLabel(`${m.label}: ${valText}`, pts[1].x, pts[1].y - 15 / state.zoom, m.color);
+            }
+        }
+
+        function drawLabel(text, x, y, color) {
+            ctx.save();
+            ctx.font = `bold ${Math.max(12, 13 / state.zoom)}px sans-serif`;
+            const metrics = ctx.measureText(text);
+            const pad = 4 / state.zoom;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+            ctx.fillRect(x - metrics.width / 2 - pad, y - 10 / state.zoom - pad, metrics.width + pad * 2, 16 / state.zoom + pad);
+
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, x, y);
+            ctx.restore();
+        }
+
+        // Help Modal toggle handlers
+        document.getElementById('helpModalBtn').addEventListener('click', () => {
+            document.getElementById('helpModal').classList.remove('hidden');
+        });
+        document.getElementById('closeHelpBtn').addEventListener('click', () => {
+            document.getElementById('helpModal').classList.add('hidden');
+        });
+
+        // Initialize App & Camera
+        resizeCanvas();
+        initCamera();
+    </script>
+</body>
+</html>
